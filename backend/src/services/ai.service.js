@@ -1,71 +1,55 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { executeHistoryAgent } from '../agents/history.agent.js';
+import { executeIngestionAgent } from '../agents/ingestion.agent.js';
+import { executeClassificationAgent } from '../agents/classification.agent.js';
+import { executeRootCauseAgent } from '../agents/root_cause.agent.js';
+import { executeResolutionAgent } from '../agents/resolution.agent.js';
+import { executeSummarizationAgent } from '../agents/summarization.agent.js';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+export const analyzeIncidentComprehensively = async (alertRawText, sourceSystem) => {
+  console.log(`[Pipeline] Starting Agentic Analysis for source: ${sourceSystem}`);
 
-// Helper: clean JSON from Gemini response
-const extractJSON = (text) => {
-  const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-  return JSON.parse(cleaned);
-};
+  // 1. History Agent (Context Retrieval)
+  const historyContext = executeHistoryAgent(sourceSystem);
+  console.log(`[Pipeline] History Context Retrieved`);
 
-export const analyzeIncidentComprehensively = async (alert, logs, runbook) => {
-  const prompt = `You are a Senior SRE/DevOps Engineer performing incident triage.
+  // 2. Ingestion Agent (Cleanup)
+  const cleanedSymptomText = await executeIngestionAgent(alertRawText);
+  console.log(`[Pipeline] Ingestion Complete`);
 
-Based ONLY on the provided Alert and Logs, provide a complete incident analysis, including parsing the logs to identify anomalies, and drafting a Slack notification.
+  // 3. Classification Agent
+  const classificationObj = await executeClassificationAgent(cleanedSymptomText, historyContext);
+  console.log(`[Pipeline] Classification Complete: ${classificationObj.severity}`);
 
-Alert: ${alert}
-Logs: ${logs || 'No logs provided.'}
-${runbook ? `Runbook Reference: ${runbook}` : 'No runbook provided.'}
+  // 4. Root Cause Agent
+  const rootCauseAnalysis = await executeRootCauseAgent(cleanedSymptomText, classificationObj, historyContext);
+  console.log(`[Pipeline] Root Cause Analysis Complete`);
 
-Return ONLY valid JSON matching this exact schema (no markdown formatting, no code fences):
-{
-  "parsedLogs": {
-    "errors": ["list of errors found in logs"],
-    "warnings": ["list of warnings found in logs"],
-    "anomalies": ["list of unusual patterns"]
-  },
-  "analysis": {
-    "summary": "Brief 1-2 sentence incident overview",
-    "severity": "Low" | "Medium" | "High" | "Critical",
-    "root_cause": "The root cause, or 'Possible cause: ...' if uncertain",
-    "confidence": "85%",
-    "affected_service": "Name of the affected component/service",
-    "recommended_actions": ["action 1", "action 2"],
-    "priority_order": ["step 1 (most urgent)", "step 2"]
-  },
-  "slackMessage": "🚨 Incident Alert\\nService: [Service]\\nSeverity: [Severity]\\nIssue: [Summary]\\nRoot Cause: [Root Cause]\\nAction: [Priority Action]"
-}
+  // 5. Resolution Agent
+  const resolutionPlan = await executeResolutionAgent(rootCauseAnalysis, historyContext);
+  console.log(`[Pipeline] Resolution Plan Complete`);
 
-Rules:
-- severity MUST be exactly one of: Low, Medium, High, Critical
-- slackMessage MUST be a single string with newline characters (\\n) and match the format precisely.
-- Base analysis only on provided logs and alert.`;
+  // 6. Summarization Agent (Final Output Mapping)
+  const pipelineState = {
+    symptoms: cleanedSymptomText,
+    classification: classificationObj,
+    root_cause: rootCauseAnalysis,
+    resolution: resolutionPlan
+  };
 
-  try {
-    const result = await model.generateContent(prompt);
-    return extractJSON(result.response.text());
-  } catch (error) {
-    console.warn('Gemini API Error (Triggering Mock Fallback for Demo):', error.message);
-    
-    // Return a highly realistic mock payload so your Hackathon demo NEVER fails in front of judges
-    // even if the API runs out of free-tier quota.
-    return {
-      "parsedLogs": {
-        "errors": ["Connection timeout to PaymentProcessingService", "AxiosError: connect ETIMEDOUT"],
-        "warnings": ["Retrying request 3/3 for transaction"],
-        "anomalies": ["Unusual spike in latency >5000ms"]
-      },
-      "analysis": {
-        "summary": "The system is experiencing critical connection timeouts to the PaymentProcessingService, resulting in failed transactions and high latency.",
-        "severity": "Critical",
-        "root_cause": "Likely network partition or downtime on the external payment gateway.",
-        "confidence": "94%",
-        "affected_service": "PaymentGateway-API",
-        "recommended_actions": ["Check external payment gateway status page", "Verify egress networking rules", "Review recent deployments affecting the payment module"],
-        "priority_order": ["Failover to redundant payment processor immediately", "Page the FinTech Core Engineering on-call"]
-      },
-      "slackMessage": "🚨 Incident Alert\nService: PaymentGateway-API\nSeverity: Critical\nIssue: The system is experiencing critical connection timeouts to the PaymentProcessingService, resulting in failed transactions and high latency.\nRoot Cause: Likely network partition or downtime on the external payment gateway.\nAction: Failover to redundant payment processor immediately"
-    };
-  }
+  const finalSummaryObj = await executeSummarizationAgent(pipelineState);
+  console.log(`[Pipeline] Summarization Complete`);
+
+  // Construct the final expected payload schema for the DB and UI
+  // Note: we dynamically pull strictly from the agents! Not hardcoding.
+  return {
+    analysis: {
+      severity: classificationObj.severity || "SEV-3",
+      category: classificationObj.category || "Unknown",
+      affected_service: sourceSystem || "Unknown Service",
+      confidence: finalSummaryObj.confidence ? `${Math.round(finalSummaryObj.confidence * 100)}` : "80", // Keep it string percentage format for UI compatibility based on previous spec, or keep it numeric depending on DB schema. Using number here because front-end multiplied by 1 earlier.
+      root_cause: rootCauseAnalysis,
+      recommended_actions: resolutionPlan.steps || [],
+      summary: finalSummaryObj.summary || "Summary generation failure."
+    }
+  };
 };
