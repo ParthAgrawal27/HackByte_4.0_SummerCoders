@@ -1,234 +1,216 @@
-import React, { useState } from 'react';
-import { AlertCircle, Terminal, Activity, FileText, Send, CheckCircle2, AlertTriangle, ShieldAlert } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { ShieldCheck, Moon, Sun, Plus, RefreshCw, MessageSquare } from 'lucide-react';
+import IncidentCard from './components/IncidentCard.jsx';
+import Dashboard from './components/Dashboard.jsx';
+import SimulateModal from './components/SimulateModal.jsx';
+import FilterBar from './components/FilterBar.jsx';
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+
+const API_BASE = 'http://127.0.0.1:8000';
 
 export default function App() {
-  const [alert, setAlert] = useState('');
-  const [logs, setLogs] = useState('');
-  const [runbook, setRunbook] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
+  const [incidents, setIncidents] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [seeding, setSeeding] = useState(false);
+  const [filters, setFilters] = useState({ severity: '', status: '', category: '' });
+  
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    if (typeof document !== 'undefined') {
+      return document.documentElement.classList.contains('dark');
+    }
+    return true;
+  });
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-    setResult(null);
+  const toggleDarkMode = () => {
+    const newMode = !isDarkMode;
+    setIsDarkMode(newMode);
+    if (newMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.theme = 'dark';
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.theme = 'light';
+    }
+  };
 
+  useEffect(() => {
+    if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.classList.add('dark');
+      setIsDarkMode(true);
+    } else {
+      document.documentElement.classList.remove('dark');
+      setIsDarkMode(false);
+    }
+  }, []);
+  
+  const buildQuery = useCallback((f) => {
+    const params = new URLSearchParams();
+    if (f.severity && f.severity !== 'All') params.set('severity', f.severity);
+    if (f.status && f.status !== 'All') params.set('status', f.status);
+    if (f.category && f.category !== 'All') params.set('category', f.category);
+    const qs = params.toString();
+    return qs ? `?${qs}` : '';
+  }, []);
+
+  const fetchData = useCallback(async (silent = false) => {
+    if (!silent) setRefreshing(true);
     try {
-      const response = await fetch('http://localhost:3000/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ alert, logs, runbook }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to analyze incident');
-      setResult(data.data);
+      const res = await fetch(`${API_BASE}/api/incidents${buildQuery(filters)}`);
+      const incData = await res.json();
+      setIncidents(Array.isArray(incData) ? incData : []);
     } catch (err) {
-      setError(err.message);
+      console.error('Fetch error:', err);
     } finally {
-      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [filters, buildQuery]);
+
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(() => fetchData(true), 5000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
+  const handleIncidentCreated = (newIncident) => {
+    setIncidents((prev) => [newIncident, ...prev]);
+    setSelectedId(newIncident.id);
+    fetchData(true);
+  };
+
+  const handleStatusChange = (updatedIncident) => {
+    setIncidents((prev) =>
+      prev.map((inc) => (inc.id === updatedIncident.id ? updatedIncident : inc))
+    );
+    fetchData(true);
+  };
+
+  const handleSeed = async () => {
+    setSeeding(true);
+    try {
+      const res = await fetch(`${API_BASE}/seed`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        await fetchData();
+        if (data.data?.length > 0) setSelectedId(data.data[0].id);
+      }
+    } catch (err) {
+      console.error('Seed failed:', err);
+    } finally {
+      setSeeding(false);
     }
   };
 
-  const getSeverityColor = (sev) => {
-    switch (sev?.toLowerCase()) {
-      case 'critical': return 'bg-red-500/20 text-red-500 border-red-500/50';
-      case 'high': return 'bg-orange-500/20 text-orange-500 border-orange-500/50';
-      case 'medium': return 'bg-yellow-500/20 text-yellow-500 border-yellow-500/50';
-      case 'low': return 'bg-green-500/20 text-green-500 border-green-500/50';
-      default: return 'bg-gray-500/20 text-gray-500 border-gray-500/50';
+  const handleReset = async () => {
+    try {
+      await fetch(`${API_BASE}/incidents/reset`, { method: 'DELETE' });
+      setSelectedId(null);
+      await fetchData();
+    } catch (err) {
+      console.error('Reset failed:', err);
     }
   };
 
-  const getSeverityIcon = (sev) => {
-    switch (sev?.toLowerCase()) {
-      case 'critical': return <ShieldAlert size={16} className="mr-2 inline" />;
-      case 'high': return <AlertTriangle size={16} className="mr-2 inline" />;
-      case 'medium': return <AlertCircle size={16} className="mr-2 inline" />;
-      default: return <CheckCircle2 size={16} className="mr-2 inline" />;
-    }
-  };
+  const selectedIncident = incidents.find((inc) => inc.id === selectedId) || null;
 
   return (
-    <div className="min-h-screen bg-[#0A0D14] text-gray-200 p-6 md:p-10 font-sans selection:bg-blue-500/30">
-      <div className="max-w-7xl mx-auto space-y-8">
-        <header className="flex items-center space-x-3 mb-10 pb-6 border-b border-gray-800/60">
-          <div className="p-3 bg-blue-600/10 rounded-xl border border-blue-500/20">
-            <Activity className="text-blue-500" size={28} />
-          </div>
-          <div>
-            <h1 className="text-3xl font-semibold tracking-tight text-white">Incident Triage AI</h1>
-            <p className="text-gray-400 text-sm mt-1">Automated DevSecOps incident analysis & runbook generation</p>
-          </div>
-        </header>
-
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          <div className="col-span-1 lg:col-span-5 space-y-6">
-            <div className="glass-card p-6 rounded-2xl border border-gray-800/50 relative overflow-hidden group hover:border-gray-700 transition-colors">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
-
-              <form onSubmit={handleSubmit} className="space-y-6 relative z-10">
-                <div className="space-y-2">
-                  <label className="flex items-center text-sm font-medium text-gray-300">
-                    <AlertCircle size={16} className="mr-2 text-rose-400" /> Webhook Alert Message
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={alert}
-                    onChange={(e) => setAlert(e.target.value)}
-                    placeholder="e.g. HIGH CPU USAGE on production-db-writer"
-                    className="w-full bg-[#131722] border border-gray-800 text-gray-100 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 placeholder-gray-600 transition-all font-mono text-sm shadow-inner"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="flex items-center text-sm font-medium text-gray-300">
-                    <Terminal size={16} className="mr-2 text-indigo-400" /> Recent Logs
-                  </label>
-                  <textarea
-                    rows={6}
-                    value={logs}
-                    onChange={(e) => setLogs(e.target.value)}
-                    placeholder="Paste application or system logs here..."
-                    className="w-full bg-[#131722] border border-gray-800 text-gray-100 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 placeholder-gray-600 transition-all font-mono text-sm shadow-inner resize-none"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="flex items-center text-sm font-medium text-gray-300">
-                    <FileText size={16} className="mr-2 text-emerald-400" /> Optional Runbook / Context
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={runbook}
-                    onChange={(e) => setRunbook(e.target.value)}
-                    placeholder="Provide any known context..."
-                    className="w-full bg-[#131722] border border-gray-800 text-gray-100 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 placeholder-gray-600 transition-all font-mono text-sm shadow-inner resize-none"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading || !alert}
-                  className="w-full flex items-center justify-center space-x-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-6 py-3.5 rounded-xl transition-all shadow-[0_0_20px_rgba(59,130,246,0.3)] hover:shadow-[0_0_25px_rgba(59,130,246,0.5)] border border-white/5 active:scale-[0.98]"
-                >
-                  {loading ? (
-                    <span className="flex items-center">
-                      Processing...
-                    </span>
-                  ) : (
-                    <>
-                      <span>Analyze Incident</span>
-                      <Send size={18} />
-                    </>
-                  )}
-                </button>
-              </form>
+    <div className="min-h-screen bg-background font-sans transition-colors duration-300 flex flex-col">
+      {/* Clean Header */}
+      <header className="header-nav">
+        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-primary/10 rounded-xl text-primary">
+              <ShieldCheck size={20} />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold tracking-tight text-foreground flex items-center gap-2">
+                Triage Copilot
+              </h1>
             </div>
           </div>
+          
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" onClick={toggleDarkMode} className="text-muted-foreground hover:text-foreground">
+              {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+            </Button>
+            
+            <Button 
+              variant="outline"
+              onClick={() => fetchData()}
+              disabled={refreshing}
+              className="px-3"
+            >
+              <RefreshCw size={14} className={cn("mr-2", refreshing && "animate-spin")} />
+              Sync
+            </Button>
 
-          <div className="col-span-1 lg:col-span-7">
-            {error && (
-              <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-xl flex items-start animate-fade-in mb-6">
-                <AlertTriangle className="mr-3 mt-0.5 shrink-0" size={20} />
-                <p className="text-sm">{error}</p>
+            <Button onClick={() => setModalOpen(true)} className="px-4">
+              <Plus size={16} className="mr-2" />
+              New Incident
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Workspace - 2 Pane Layout */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 md:grid-cols-12 gap-6 overflow-hidden">
+        
+        {/* Left Pane: Conversation History */}
+        <div className="md:col-span-4 flex flex-col bg-card border rounded-2xl shadow-sm overflow-hidden h-[calc(100vh-120px)]">
+          <div className="p-4 border-b bg-muted/20">
+            <FilterBar
+              filters={filters}
+              onFilterChange={setFilters}
+              onSeed={handleSeed}
+              onReset={handleReset}
+              seeding={seeding}
+            />
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+            {incidents.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-center p-8">
+                <MessageSquare size={32} className="mb-4 opacity-50" />
+                <p className="text-sm">No incidents available.</p>
+                <p className="text-xs opacity-70 mt-1">Start a new brief or load demo data.</p>
               </div>
-            )}
-
-            {result && (
-              <div className="space-y-6 animate-fade-in-up pb-10">
-                <div className="glass-card p-6 rounded-2xl border border-gray-800 bg-[#0E121A]/80 shadow-xl overflow-hidden relative">
-                  <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
-                  
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                    <div>
-                      <h2 className="text-xl font-medium text-white mb-2">Diagnostic Summary</h2>
-                      <p className="text-gray-300 text-sm leading-relaxed">{result.analysis.summary}</p>
-                    </div>
-                    
-                    <div className={`px-4 py-1.5 rounded-full border text-sm font-semibold whitespace-nowrap flex items-center shadow-lg ${getSeverityColor(result.analysis.severity)}`}>
-                      {getSeverityIcon(result.analysis.severity)}
-                      {result.analysis.severity?.toUpperCase()} SEVERITY
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid grid-cols-2 gap-4">
-                    <div className="bg-[#131722] p-4 rounded-xl border border-gray-800/80">
-                      <p className="text-xs text-gray-500 font-medium tracking-wider uppercase mb-1">Affected Service</p>
-                      <p className="text-gray-100 font-medium font-mono text-sm">{result.analysis.affected_service}</p>
-                    </div>
-                    <div className="bg-[#131722] p-4 rounded-xl border border-gray-800/80">
-                      <div className="flex justify-between items-center mb-1">
-                        <p className="text-xs text-gray-500 font-medium tracking-wider uppercase">Confidence</p>
-                        <span className="text-xs text-blue-400 font-bold">{result.analysis.confidence}</span>
-                      </div>
-                      <div className="w-full bg-gray-800 rounded-full h-1.5 mt-2 overflow-hidden">
-                        <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: result.analysis.confidence }}></div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="glass-card p-6 rounded-2xl border border-rose-900/30 bg-gradient-to-b from-rose-950/10 to-transparent">
-                  <h3 className="text-lg font-medium text-rose-300 mb-3 flex items-center">
-                    <Activity className="mr-2" size={18} /> Root Cause Analysis
-                  </h3>
-                  <p className="text-gray-200 text-sm leading-relaxed font-medium">
-                    {result.analysis.root_cause}
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="glass-card p-6 rounded-2xl border border-gray-800 bg-[#0E121A]">
-                    <h3 className="text-lg font-medium text-emerald-400 mb-4 flex items-center">
-                      <CheckCircle2 className="mr-2" size={18} /> Priority Mitigation
-                    </h3>
-                    <ol className="space-y-4">
-                      {result.analysis.priority_order?.map((step, i) => (
-                        <li key={i} className="flex flex-col gap-1">
-                          <div className="flex items-start text-sm text-gray-200">
-                            <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-500/10 text-emerald-500 text-xs font-bold mr-3 shrink-0 border border-emerald-500/20">
-                              {i + 1}
-                            </span>
-                            <span className="pt-0.5">{step}</span>
-                          </div>
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-
-                  <div className="glass-card p-6 rounded-2xl border border-gray-800 bg-[#0E121A]">
-                     <h3 className="text-lg font-medium text-indigo-400 mb-4 flex items-center">
-                      <FileText className="mr-2" size={18} /> Investigation Steps
-                    </h3>
-                    <ul className="space-y-3">
-                      {result.analysis.recommended_actions?.map((action, i) => (
-                        <li key={i} className="flex items-start text-sm text-gray-300">
-                          <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 mt-1.5 mr-3 shrink-0"></div>
-                          {action}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-
-                <div className="glass-card rounded-2xl border border-gray-800 overflow-hidden bg-[#131722]">
-                  <div className="bg-gray-800/40 px-4 py-3 border-b border-gray-700/50 flex items-center">
-                    <span className="text-sm font-medium text-gray-200">#incident-alerts (Slack Ready)</span>
-                  </div>
-                  <div className="p-4 sm:p-6 font-mono text-sm text-gray-300 whitespace-pre-wrap leading-relaxed">
-                    {result.slackMessage}
-                  </div>
-                </div>
-                
-              </div>
+            ) : (
+              incidents.map((inc) => (
+                <IncidentCard
+                  key={inc.id}
+                  incident={inc}
+                  isSelected={selectedId === inc.id}
+                  onClick={() => setSelectedId(inc.id)}
+                />
+              ))
             )}
           </div>
         </div>
-      </div>
+
+        {/* Right Pane: Copilot Chat Feed */}
+        <div className="md:col-span-8 bg-card border rounded-2xl shadow-sm overflow-hidden h-[calc(100vh-120px)] flex flex-col">
+          {selectedIncident ? (
+             <Dashboard
+               incident={selectedIncident}
+               onStatusChange={handleStatusChange}
+             />
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
+              <ShieldCheck size={48} className="mb-4 opacity-20" />
+              <h2 className="text-xl font-medium text-foreground">Copilot Idle</h2>
+              <p className="text-sm mt-2">Select an incident thread to view the assistant's analysis.</p>
+            </div>
+          )}
+        </div>
+      </main>
+
+      <SimulateModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onIncidentCreated={handleIncidentCreated}
+      />
     </div>
   );
 }

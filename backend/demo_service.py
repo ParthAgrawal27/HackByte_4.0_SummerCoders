@@ -1,6 +1,7 @@
-# Fallback patch generated due to API rate limit
-
 def timeout_handler():
-    max_retries = 5  # increased retries
+    max_retries = 3
     for i in range(max_retries):
-        pass
+        try:
+            pass  # network call
+        except Exception:
+            pass
