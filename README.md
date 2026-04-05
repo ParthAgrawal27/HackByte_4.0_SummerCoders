@@ -49,3 +49,12 @@ node scripts/generate_data.js
 
 ## 🚧 Next Steps (Phase 2)
 The database structure is built. Phase 2 simply involves adding an `/api/slack` webhook endpoint in Express that calls `Jira API`, instead of relying heavily on the UI dashboard!
+
+## 🧠 How It Works — End-to-End Flow
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│  Alert    │────▶│  Gemini  │────▶│  Patch   │────▶│  GitHub  │────▶│  Human   │
+│  Received │     │  Analyze │     │  Generate│     │  PR Open │     │  Review  │
+└──────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘
+```
